@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
@@ -12,18 +11,31 @@ import {
   Eye,
   EyeOff,
   Building2,
-  UserCheck,
+  CheckCircle2,
   UserX,
+  ShieldAlert,
+  Archive,
+  History,
   Clock,
-  Moon,
-  Sun,
-  ShieldCheck,
-  BriefcaseBusiness,
-  CalendarDays,
-  BarChart3,
+  Pencil,
+  Shield,
+  CalendarClock,
 } from 'lucide-react'
 
-import { getStaff, registerStaff } from '../api/staff'
+import { useAuth } from '../features/auth/AuthContext'
+
+import {
+  getStaff,
+  registerStaff,
+  updateStaff,
+  updateStaffStatus,
+  getStaffStatusHistory,
+  updateStaffRole,
+  getStaffRoleHistory,
+  getStaffShiftHistory,
+  changeStaffShift,
+} from '../api/staff'
+
 import { getBranches } from '../api/branches'
 
 const getToday = () => {
@@ -49,19 +61,25 @@ const initialForm = {
   date_joined: getToday(),
 }
 
+const initialEditForm = {
+  staff_number: '',
+  branch: '',
+  phone_number: '',
+  date_joined: '',
+}
+
 const inputClass =
   'w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed'
 
 const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
 
-const ROLE_LABELS = {
-  OWNER: 'Owner',
-  ADMIN: 'Administrator',
-  SUPERVISOR: 'Supervisor',
-  ACCOUNTS: 'Accounts',
-  CLEANER: 'Cleaner',
-  DETAILER: 'Detailer',
-}
+const roleOptions = [
+  { value: 'CLEANER', label: 'Cleaner' },
+  { value: 'DETAILER', label: 'Detailer' },
+  { value: 'SUPERVISOR', label: 'Supervisor' },
+  { value: 'ACCOUNTS', label: 'Accounts' },
+  { value: 'ADMIN', label: 'Administrator' },
+]
 
 function getErrorMessage(error) {
   const data = error.response?.data
@@ -84,46 +102,14 @@ function getErrorMessage(error) {
     .join('\n')
 }
 
-function SummaryCard({ label, value, description, icon: Icon, iconClass }) {
+function SummaryCard({ label, value, description }) {
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm text-slate-500">{label}</p>
-          <p className="text-2xl font-bold text-slate-900 mt-2">
-            {value}
-          </p>
-          {description && (
-            <p className="text-xs text-slate-500 mt-1">{description}</p>
-          )}
-        </div>
-
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${iconClass}`}>
-          <Icon size={20} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DistributionRow({ label, count, total, color = 'bg-blue-600' }) {
-  const percentage = total > 0 ? (count / total) * 100 : 0
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="text-slate-700 font-medium">{label}</span>
-        <span className="text-slate-500 tabular-nums">
-          {count} ({Math.round(percentage)}%)
-        </span>
-      </div>
-
-      <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full ${color} transition-all`}
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
+      <p className="text-sm text-slate-500">{label}</p>
+      <p className="text-2xl font-bold text-slate-900 mt-2">{value}</p>
+      {description && (
+        <p className="text-xs text-slate-500 mt-1">{description}</p>
+      )}
     </div>
   )
 }
@@ -141,33 +127,114 @@ function getStatusStyle(status) {
   }
 }
 
-function getShiftStyle(shift) {
-  if (shift === 'DAY') {
-    return 'bg-amber-50 text-amber-700'
+function getActionLabel(action) {
+  const labels = {
+    ACTIVATED: 'Activated',
+    DEACTIVATED: 'Deactivated',
+    SUSPENDED: 'Suspended',
+    ARCHIVED: 'Archived',
   }
 
-  if (shift === 'NIGHT') {
-    return 'bg-indigo-50 text-indigo-700'
-  }
-
-  return 'bg-slate-100 text-slate-600'
+  return labels[action] || action
 }
 
-function formatDate(value) {
+function formatDateTime(value) {
   if (!value) return 'Not available'
 
   const date = new Date(value)
 
-  if (Number.isNaN(date.getTime())) return 'Not available'
+  if (Number.isNaN(date.getTime())) return value
 
-  return new Intl.DateTimeFormat('en-KE', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  }).format(date)
+  return date.toLocaleString()
+}
+
+function formatRole(role) {
+  if (!role) return 'Not assigned'
+
+  return role
+    .toLowerCase()
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function Modal({ title, description, onClose, children, footer, maxWidth = 'max-w-xl' }) {
+  return (
+    <div
+      className="fixed inset-0 z-[100] bg-slate-950/60 flex items-center justify-center p-3 sm:p-6"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <div className={`bg-white w-full ${maxWidth} max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden`}>
+        <div className="px-6 py-5 border-b border-slate-200 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">{title}</h2>
+            {description && (
+              <p className="text-sm text-slate-500 mt-1">{description}</p>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg text-slate-500 hover:bg-slate-100"
+            aria-label="Close dialog"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-6 overflow-y-auto">{children}</div>
+
+        {footer && (
+          <div className="px-6 py-4 bg-slate-50 border-t border-slate-200">
+            {footer}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function HistoryList({ items, loading, error, emptyTitle, emptyDescription, renderItem }) {
+  if (loading) {
+    return (
+      <div className="py-8 text-center text-slate-500">
+        <RefreshCw size={24} className="animate-spin mx-auto mb-3" />
+        Loading history...
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="p-4 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 whitespace-pre-line">
+        {error}
+      </div>
+    )
+  }
+
+  if (!items.length) {
+    return (
+      <div className="py-8 text-center">
+        <History size={30} className="mx-auto text-slate-300 mb-3" />
+        <p className="font-medium text-slate-700">{emptyTitle}</p>
+        <p className="text-sm text-slate-500 mt-1">{emptyDescription}</p>
+      </div>
+    )
+  }
+
+  return <div className="space-y-3">{items.map(renderItem)}</div>
 }
 
 export default function StaffPage() {
+  const { user } = useAuth()
+
+  const currentRole = user?.role
+  const canManageRoles = ['OWNER', 'ADMIN'].includes(currentRole)
+  const canManageAdminRole =
+    currentRole === 'OWNER' || Boolean(user?.is_superuser)
+
   const [staff, setStaff] = useState([])
   const [branches, setBranches] = useState([])
 
@@ -180,11 +247,53 @@ export default function StaffPage() {
   const [formError, setFormError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
 
+  const [showDirectory, setShowDirectory] = useState(false)
+
   const [showModal, setShowModal] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-
   const [form, setForm] = useState(initialForm)
+
+  const [detailsMember, setDetailsMember] = useState(null)
+
+  const [editingMember, setEditingMember] = useState(null)
+  const [editForm, setEditForm] = useState(initialEditForm)
+  const [editError, setEditError] = useState('')
+  const [editSubmitting, setEditSubmitting] = useState(false)
+
+  const [selectedMember, setSelectedMember] = useState(null)
+  const [pendingAction, setPendingAction] = useState('')
+  const [actionReason, setActionReason] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [actionLoading, setActionLoading] = useState(false)
+
+  const [historyMember, setHistoryMember] = useState(null)
+  const [historyItems, setHistoryItems] = useState([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
+
+  // Role management state.
+  const [showRoleManagement, setShowRoleManagement] = useState(false)
+  const [roleMember, setRoleMember] = useState(null)
+  const [roleValue, setRoleValue] = useState('')
+  const [roleReason, setRoleReason] = useState('')
+  const [roleError, setRoleError] = useState('')
+  const [roleLoading, setRoleLoading] = useState(false)
+  const [roleHistory, setRoleHistory] = useState([])
+  const [roleHistoryLoading, setRoleHistoryLoading] = useState(false)
+  const [roleHistoryError, setRoleHistoryError] = useState('')
+
+  // Shift management state.
+  const [showShiftManagement, setShowShiftManagement] = useState(false)
+  const [shiftMember, setShiftMember] = useState(null)
+  const [shiftValue, setShiftValue] = useState('DAY')
+  const [shiftEffectiveFrom, setShiftEffectiveFrom] = useState(getToday())
+  const [shiftReason, setShiftReason] = useState('')
+  const [shiftError, setShiftError] = useState('')
+  const [shiftLoading, setShiftLoading] = useState(false)
+  const [shiftHistory, setShiftHistory] = useState([])
+  const [shiftHistoryLoading, setShiftHistoryLoading] = useState(false)
+  const [shiftHistoryError, setShiftHistoryError] = useState('')
 
   const loadStaff = useCallback(async () => {
     setLoading(true)
@@ -227,80 +336,6 @@ export default function StaffPage() {
     loadBranches()
   }, [loadStaff, loadBranches])
 
-  // All overview statistics are calculated from the staff API response.
-  const overview = useMemo(() => {
-    const total = staff.length
-
-    const active = staff.filter(
-      (member) => member.employment_status === 'ACTIVE'
-    ).length
-
-    const inactive = staff.filter(
-      (member) => member.employment_status === 'INACTIVE'
-    ).length
-
-    const suspended = staff.filter(
-      (member) => member.employment_status === 'SUSPENDED'
-    ).length
-
-    const dayShift = staff.filter(
-      (member) => member.current_shift === 'DAY'
-    ).length
-
-    const nightShift = staff.filter(
-      (member) => member.current_shift === 'NIGHT'
-    ).length
-
-    const unassignedShift = staff.filter(
-      (member) => !['DAY', 'NIGHT'].includes(member.current_shift)
-    ).length
-
-    const roles = Object.keys(ROLE_LABELS).map((role) => ({
-      role,
-      label: ROLE_LABELS[role],
-      count: staff.filter((member) => member.role === role).length,
-    })).filter((item) => item.count > 0)
-
-    const branchMap = new Map()
-
-    staff.forEach((member) => {
-      const branchKey = member.branch ?? member.branch_name ?? 'unassigned'
-      const branchLabel = member.branch_name || 'Branch not assigned'
-
-      if (!branchMap.has(String(branchKey))) {
-        branchMap.set(String(branchKey), {
-          label: branchLabel,
-          count: 0,
-        })
-      }
-
-      branchMap.get(String(branchKey)).count += 1
-    })
-
-    const branchDistribution = Array.from(branchMap.values())
-      .sort((a, b) => b.count - a.count)
-
-    const recentStaff = [...staff]
-      .filter((member) => member.created_at)
-      .sort(
-        (a, b) => new Date(b.created_at) - new Date(a.created_at)
-      )
-      .slice(0, 5)
-
-    return {
-      total,
-      active,
-      inactive,
-      suspended,
-      dayShift,
-      nightShift,
-      unassignedShift,
-      roles,
-      branchDistribution,
-      recentStaff,
-    }
-  }, [staff])
-
   const filteredStaff = useMemo(() => {
     const term = search.trim().toLowerCase()
 
@@ -325,10 +360,31 @@ export default function StaffPage() {
     })
   }, [staff, search])
 
+  const activeCount = staff.filter(
+    (member) => member.employment_status === 'ACTIVE'
+  ).length
+
+  const inactiveCount = staff.filter(
+    (member) => member.employment_status === 'INACTIVE'
+  ).length
+
+  const suspendedCount = staff.filter(
+    (member) => member.employment_status === 'SUSPENDED'
+  ).length
+
   const updateField = (event) => {
     const { name, value } = event.target
 
     setForm((previous) => ({
+      ...previous,
+      [name]: value,
+    }))
+  }
+
+  const updateEditField = (event) => {
+    const { name, value } = event.target
+
+    setEditForm((previous) => ({
       ...previous,
       [name]: value,
     }))
@@ -345,9 +401,7 @@ export default function StaffPage() {
     setShowPassword(false)
     setShowModal(true)
 
-    if (branches.length === 0) {
-      loadBranches()
-    }
+    if (branches.length === 0) loadBranches()
   }
 
   const closeRegistration = () => {
@@ -402,11 +456,427 @@ export default function StaffPage() {
     }
   }
 
+  const openEdit = (member) => {
+    setEditingMember(member)
+    setEditForm({
+      staff_number: member.staff_number || '',
+      branch: member.branch ? String(member.branch) : '',
+      phone_number: member.phone_number || '',
+      date_joined: member.date_joined || '',
+    })
+    setEditError('')
+    setSuccessMessage('')
+
+    if (branches.length === 0) loadBranches()
+  }
+
+  const closeEdit = () => {
+    if (editSubmitting) return
+
+    setEditingMember(null)
+    setEditForm(initialEditForm)
+    setEditError('')
+  }
+
+  const handleEdit = async (event) => {
+    event.preventDefault()
+
+    if (!editingMember) return
+
+    setEditError('')
+    setSuccessMessage('')
+
+    if (!editForm.staff_number.trim()) {
+      setEditError('Staff number is required.')
+      return
+    }
+
+    if (!editForm.branch) {
+      setEditError('Please select a branch.')
+      return
+    }
+
+    if (!editForm.date_joined) {
+      setEditError('Date joined is required.')
+      return
+    }
+
+    if (editForm.date_joined > getToday()) {
+      setEditError('Date joined cannot be in the future.')
+      return
+    }
+
+    const payload = {
+      staff_number: editForm.staff_number.trim(),
+      branch: Number(editForm.branch),
+      phone_number: editForm.phone_number.trim(),
+      date_joined: editForm.date_joined,
+    }
+
+    setEditSubmitting(true)
+
+    try {
+      await updateStaff(editingMember.id, payload)
+
+      setSuccessMessage('Staff profile updated successfully.')
+      closeEdit()
+      await loadStaff()
+    } catch (err) {
+      setEditError(getErrorMessage(err))
+    } finally {
+      setEditSubmitting(false)
+    }
+  }
+
+  const openStatusAction = (member, action) => {
+    setSelectedMember(member)
+    setPendingAction(action)
+    setActionReason('')
+    setActionError('')
+  }
+
+  const closeStatusAction = () => {
+    if (actionLoading) return
+
+    setSelectedMember(null)
+    setPendingAction('')
+    setActionReason('')
+    setActionError('')
+  }
+
+  const handleStatusAction = async (event) => {
+    event.preventDefault()
+
+    if (!selectedMember || !pendingAction) return
+
+    if (
+      ['SUSPEND', 'DEACTIVATE', 'ARCHIVE'].includes(pendingAction) &&
+      !actionReason.trim()
+    ) {
+      setActionError('Please provide a reason for this action.')
+      return
+    }
+
+    setActionLoading(true)
+    setActionError('')
+    setSuccessMessage('')
+
+    try {
+      const response = await updateStaffStatus(selectedMember.id, {
+        action: pendingAction,
+        reason: actionReason.trim(),
+      })
+
+      const messages = {
+        ACTIVATE: 'Staff member activated successfully.',
+        DEACTIVATE: 'Staff member deactivated successfully.',
+        SUSPEND: 'Staff member suspended successfully.',
+        ARCHIVE: 'Staff member archived successfully.',
+      }
+
+      setSuccessMessage(response.detail || messages[pendingAction])
+
+      closeStatusAction()
+      await loadStaff()
+    } catch (err) {
+      setActionError(getErrorMessage(err))
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const openHistory = async (member) => {
+    setHistoryMember(member)
+    setHistoryItems([])
+    setHistoryError('')
+    setHistoryLoading(true)
+
+    try {
+      const data = await getStaffStatusHistory(member.id)
+      setHistoryItems(data)
+    } catch (err) {
+      setHistoryError(getErrorMessage(err))
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const closeHistory = () => {
+    setHistoryMember(null)
+    setHistoryItems([])
+    setHistoryError('')
+  }
+
+  // ---------------- ROLE MANAGEMENT ----------------
+
+  const openRoleManagement = () => {
+    setShowRoleManagement(true)
+    setRoleMember(null)
+    setRoleHistory([])
+    setRoleError('')
+    setRoleHistoryError('')
+    setRoleReason('')
+    setRoleValue('')
+    setSuccessMessage('')
+  }
+
+  const closeRoleManagement = () => {
+    if (roleLoading) return
+
+    setShowRoleManagement(false)
+    setRoleMember(null)
+    setRoleHistory([])
+    setRoleError('')
+    setRoleHistoryError('')
+    setRoleReason('')
+  }
+
+  const selectRoleMember = async (member) => {
+    setRoleMember(member)
+    setRoleValue(member.role || '')
+    setRoleReason('')
+    setRoleError('')
+    setRoleHistory([])
+    setRoleHistoryError('')
+    setRoleHistoryLoading(true)
+
+    try {
+      if (!member.user) {
+        throw new Error('This staff profile does not contain a linked user ID.')
+      }
+
+      const data = await getStaffRoleHistory(member.user)
+      setRoleHistory(data)
+    } catch (err) {
+      setRoleHistoryError(
+        err.message || getErrorMessage(err)
+      )
+    } finally {
+      setRoleHistoryLoading(false)
+    }
+  }
+
+  const handleRoleChange = async (event) => {
+    event.preventDefault()
+
+    if (!roleMember) return
+
+    setRoleError('')
+
+    if (!roleValue) {
+      setRoleError('Please select a role.')
+      return
+    }
+
+    if (roleValue === roleMember.role) {
+      setRoleError('The selected role is already assigned.')
+      return
+    }
+
+    if (!roleReason.trim()) {
+      setRoleError('A reason is required when changing a staff role.')
+      return
+    }
+
+    if (roleMember.role === 'OWNER') {
+      setRoleError('Owner accounts cannot be changed through staff role management.')
+      return
+    }
+
+    if (roleValue === 'ADMIN' && !canManageAdminRole) {
+      setRoleError('Only an Owner or superuser can assign the Administrator role.')
+      return
+    }
+
+    setRoleLoading(true)
+
+    try {
+      await updateStaffRole(roleMember.user, {
+        role: roleValue,
+        role_change_reason: roleReason.trim(),
+      })
+
+      setSuccessMessage(
+        `Role updated successfully for ${roleMember.full_name || roleMember.username}.`
+      )
+
+      setRoleReason('')
+      await loadStaff()
+
+      const updatedMember = {
+        ...roleMember,
+        role: roleValue,
+      }
+
+      setRoleMember(updatedMember)
+
+      const updatedHistory = await getStaffRoleHistory(roleMember.user)
+      setRoleHistory(updatedHistory)
+    } catch (err) {
+      setRoleError(getErrorMessage(err))
+    } finally {
+      setRoleLoading(false)
+    }
+  }
+
+  // ---------------- SHIFT MANAGEMENT ----------------
+
+  const openShiftManagement = () => {
+    setShowShiftManagement(true)
+    setShiftMember(null)
+    setShiftHistory([])
+    setShiftError('')
+    setShiftHistoryError('')
+    setShiftReason('')
+    setShiftValue('DAY')
+    setShiftEffectiveFrom(getToday())
+    setSuccessMessage('')
+  }
+
+  const closeShiftManagement = () => {
+    if (shiftLoading) return
+
+    setShowShiftManagement(false)
+    setShiftMember(null)
+    setShiftHistory([])
+    setShiftError('')
+    setShiftHistoryError('')
+    setShiftReason('')
+  }
+
+  const selectShiftMember = async (member) => {
+    setShiftMember(member)
+    setShiftValue(member.current_shift || 'DAY')
+    setShiftEffectiveFrom(getToday())
+    setShiftReason('')
+    setShiftError('')
+    setShiftHistory([])
+    setShiftHistoryError('')
+    setShiftHistoryLoading(true)
+
+    try {
+      const data = await getStaffShiftHistory(member.id)
+      setShiftHistory(data)
+    } catch (err) {
+      setShiftHistoryError(getErrorMessage(err))
+    } finally {
+      setShiftHistoryLoading(false)
+    }
+  }
+
+  const handleShiftChange = async (event) => {
+    event.preventDefault()
+
+    if (!shiftMember) return
+
+    setShiftError('')
+
+    if (!shiftEffectiveFrom) {
+      setShiftError('Please select an effective date.')
+      return
+    }
+
+    if (shiftEffectiveFrom < getToday()) {
+      setShiftError('Shift changes cannot be backdated.')
+      return
+    }
+
+    if (shiftValue === shiftMember.current_shift) {
+      setShiftError('The selected shift is already assigned.')
+      return
+    }
+
+    if (!shiftReason.trim()) {
+      setShiftError('Please provide a reason for the shift change.')
+      return
+    }
+
+    setShiftLoading(true)
+
+    try {
+      await changeStaffShift(shiftMember.id, {
+        shift: shiftValue,
+        effective_from: shiftEffectiveFrom,
+        reason: shiftReason.trim(),
+      })
+
+      setSuccessMessage(
+        `Shift updated successfully for ${shiftMember.full_name || shiftMember.username}.`
+      )
+
+      setShiftReason('')
+      await loadStaff()
+
+      const refreshedHistory = await getStaffShiftHistory(shiftMember.id)
+      setShiftHistory(refreshedHistory)
+
+      setShiftMember({
+        ...shiftMember,
+        current_shift: shiftValue,
+      })
+    } catch (err) {
+      setShiftError(getErrorMessage(err))
+    } finally {
+      setShiftLoading(false)
+    }
+  }
+
+  const actionDetails = {
+    ACTIVATE: {
+      title: 'Reactivate Staff Account',
+      description:
+        'This will restore the employee to active employment status and enable their login access.',
+      button: 'Confirm Reactivation',
+      buttonClass: 'bg-green-600 hover:bg-green-700',
+      icon: <CheckCircle2 size={20} />,
+      requiresReason: false,
+    },
+    DEACTIVATE: {
+      title: 'Deactivate Staff Account',
+      description:
+        'This will set the employee to inactive and disable their login access. The employee will remain in the staff directory.',
+      button: 'Confirm Deactivation',
+      buttonClass: 'bg-slate-700 hover:bg-slate-800',
+      icon: <UserX size={20} />,
+      requiresReason: true,
+    },
+    SUSPEND: {
+      title: 'Suspend Staff Account',
+      description:
+        'This will mark the employee as suspended and immediately disable their login access. The suspension will be recorded in the staff history.',
+      button: 'Confirm Suspension',
+      buttonClass: 'bg-red-600 hover:bg-red-700',
+      icon: <ShieldAlert size={20} />,
+      requiresReason: true,
+    },
+    ARCHIVE: {
+      title: 'Archive Staff Account',
+      description:
+        'This will archive the employee record, disable login access and remove the employee from the normal staff directory. This action should be used when the record should no longer be active.',
+      button: 'Confirm Archive',
+      buttonClass: 'bg-red-700 hover:bg-red-800',
+      icon: <Archive size={20} />,
+      requiresReason: true,
+    },
+  }
+
+  const currentAction = actionDetails[pendingAction]
+
+  const manageableRoleMembers = staff.filter(
+    (member) =>
+      member.role !== 'OWNER' &&
+      member.user &&
+      member.employment_status !== 'ARCHIVED'
+  )
+
+  const shiftMembers = staff.filter(
+    (member) => member.employment_status !== 'ARCHIVED'
+  )
+
   return (
     <div className="space-y-7">
-
       {/* Page heading */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col gap-4">
         <div className="flex items-center gap-3">
           <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center">
             <Users size={23} />
@@ -416,24 +886,14 @@ export default function StaffPage() {
             <h1 className="text-2xl font-bold text-slate-900">
               Staff Management
             </h1>
-
             <p className="text-sm text-slate-500 mt-1">
-              Manage NEV CARWASH employees and staff accounts.
+              Manage NEV CARWASH employees, roles, shifts and staff accounts.
             </p>
           </div>
         </div>
 
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={loadStaff}
-            disabled={loading}
-            className="flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
-
+        {/* Four separate management buttons */}
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={openRegistration}
@@ -441,6 +901,37 @@ export default function StaffPage() {
           >
             <UserPlus size={18} />
             Register Staff
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowDirectory((previous) => !previous)}
+            aria-expanded={showDirectory}
+            aria-controls="staff-directory"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-blue-600 text-blue-700 hover:bg-blue-50 text-sm font-semibold transition-colors"
+          >
+            {showDirectory ? <EyeOff size={18} /> : <Eye size={18} />}
+            {showDirectory ? 'Hide Members' : 'View Members'}
+          </button>
+
+          {canManageRoles && (
+            <button
+              type="button"
+              onClick={openRoleManagement}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-purple-300 text-purple-700 hover:bg-purple-50 text-sm font-semibold transition-colors"
+            >
+              <Shield size={18} />
+              Manage Roles
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={openShiftManagement}
+            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold transition-colors"
+          >
+            <CalendarClock size={18} />
+            Manage Shifts
           </button>
         </div>
       </div>
@@ -455,412 +946,847 @@ export default function StaffPage() {
         </div>
       )}
 
-      {/* Staff overview */}
-      <section className="space-y-4">
-        <div className="flex items-center gap-2">
-          <BarChart3 size={19} className="text-slate-500" />
-          <h2 className="font-semibold text-slate-900">Staff Overview</h2>
-          <span className="text-xs text-slate-400">Live database figures</span>
-        </div>
-
-        {error && (
-          <div className="p-4 rounded-lg bg-red-50 border border-red-200 flex items-start gap-3">
-            <AlertCircle size={20} className="text-red-600 shrink-0" />
-            <p className="text-sm text-red-800">{error}</p>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          <SummaryCard
-            label="Total Staff"
-            value={loading ? '—' : overview.total}
-            description="Registered employee profiles"
-            icon={Users}
-            iconClass="bg-blue-50 text-blue-700"
-          />
-
-          <SummaryCard
-            label="Active Staff"
-            value={loading ? '—' : overview.active}
-            description="Eligible for operational assignments"
-            icon={UserCheck}
-            iconClass="bg-green-50 text-green-700"
-          />
-
-          <SummaryCard
-            label="Inactive Staff"
-            value={loading ? '—' : overview.inactive}
-            description="Currently inactive"
-            icon={UserX}
-            iconClass="bg-slate-100 text-slate-600"
-          />
-
-          <SummaryCard
-            label="Suspended Staff"
-            value={loading ? '—' : overview.suspended}
-            description="Currently suspended"
-            icon={ShieldCheck}
-            iconClass="bg-red-50 text-red-700"
-          />
-        </div>
-
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-
-          {/* Role distribution */}
-          <section className="bg-white border border-slate-200 rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-5">
-              <BriefcaseBusiness size={19} className="text-slate-500" />
-              <div>
-                <h3 className="font-semibold text-slate-900">
-                  Role Distribution
-                </h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Employee profiles by assigned role
-                </p>
-              </div>
-            </div>
-
-            {loading ? (
-              <p className="text-sm text-slate-500">Loading role statistics...</p>
-            ) : overview.roles.length === 0 ? (
-              <p className="text-sm text-slate-500">No staff roles available.</p>
-            ) : (
-              <div className="space-y-4">
-                {overview.roles.map((item) => (
-                  <DistributionRow
-                    key={item.role}
-                    label={item.label}
-                    count={item.count}
-                    total={overview.total}
-                    color="bg-blue-600"
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Shift distribution */}
-          <section className="bg-white border border-slate-200 rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-5">
-              <Clock size={19} className="text-slate-500" />
-              <div>
-                <h3 className="font-semibold text-slate-900">
-                  Shift Distribution
-                </h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Based on currently effective shift assignments
-                </p>
-              </div>
-            </div>
-
-            {loading ? (
-              <p className="text-sm text-slate-500">Loading shift statistics...</p>
-            ) : (
-              <div className="space-y-4">
-                <DistributionRow
-                  label="Day Shift"
-                  count={overview.dayShift}
-                  total={overview.total}
-                  color="bg-amber-500"
-                />
-
-                <DistributionRow
-                  label="Night Shift"
-                  count={overview.nightShift}
-                  total={overview.total}
-                  color="bg-indigo-600"
-                />
-
-                <DistributionRow
-                  label="Unassigned"
-                  count={overview.unassignedShift}
-                  total={overview.total}
-                  color="bg-slate-400"
-                />
-
-                <div className="grid grid-cols-3 gap-2 pt-2">
-                  <div className="rounded-lg bg-amber-50 p-3 text-center">
-                    <Sun size={18} className="mx-auto text-amber-600 mb-1" />
-                    <p className="text-lg font-bold text-amber-800">
-                      {overview.dayShift}
-                    </p>
-                    <p className="text-xs text-amber-700">Day</p>
-                  </div>
-
-                  <div className="rounded-lg bg-indigo-50 p-3 text-center">
-                    <Moon size={18} className="mx-auto text-indigo-600 mb-1" />
-                    <p className="text-lg font-bold text-indigo-800">
-                      {overview.nightShift}
-                    </p>
-                    <p className="text-xs text-indigo-700">Night</p>
-                  </div>
-
-                  <div className="rounded-lg bg-slate-100 p-3 text-center">
-                    <Clock size={18} className="mx-auto text-slate-600 mb-1" />
-                    <p className="text-lg font-bold text-slate-800">
-                      {overview.unassignedShift}
-                    </p>
-                    <p className="text-xs text-slate-600">Unassigned</p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </section>
-        </div>
-
-        {/* Branch distribution */}
-        <section className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="flex items-center gap-2 mb-5">
-            <Building2 size={19} className="text-slate-500" />
-            <div>
-              <h3 className="font-semibold text-slate-900">
-                Branch Distribution
-              </h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Staff members assigned to each branch
-              </p>
-            </div>
-          </div>
-
-          {loading ? (
-            <p className="text-sm text-slate-500">Loading branch statistics...</p>
-          ) : overview.branchDistribution.length === 0 ? (
-            <p className="text-sm text-slate-500">No branch assignments found.</p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-              {overview.branchDistribution.map((branch) => (
-                <div
-                  key={branch.label}
-                  className="border border-slate-200 rounded-lg p-4 flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <p className="font-medium text-slate-800 truncate">
-                      {branch.label}
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Assigned employees
-                    </p>
-                  </div>
-
-                  <span className="text-xl font-bold text-slate-900">
-                    {branch.count}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* Recently added staff */}
-        <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="p-5 border-b border-slate-200 flex items-center gap-2">
-            <CalendarDays size={19} className="text-slate-500" />
-            <div>
-              <h3 className="font-semibold text-slate-900">
-                Recently Added Staff
-              </h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Latest employee accounts created in the system
-              </p>
-            </div>
-          </div>
-
-          {loading ? (
-            <p className="p-5 text-sm text-slate-500">Loading recent staff...</p>
-          ) : overview.recentStaff.length === 0 ? (
-            <p className="p-5 text-sm text-slate-500">
-              No recent staff records available.
-            </p>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {overview.recentStaff.map((member) => (
-                <div
-                  key={member.id}
-                  className="px-5 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
-                >
-                  <div>
-                    <p className="font-medium text-sm text-slate-900">
-                      {member.full_name || member.username}
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {member.staff_number} · {ROLE_LABELS[member.role] || member.role}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-3 text-xs text-slate-500">
-                    <span>{member.branch_name || 'No branch'}</span>
-                    <span>{formatDate(member.created_at)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </section>
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <SummaryCard label="Total Staff" value={staff.length} />
+        <SummaryCard label="Active" value={activeCount} />
+        <SummaryCard label="Inactive" value={inactiveCount} />
+        <SummaryCard
+          label="Suspended"
+          value={suspendedCount}
+          description="Login access disabled"
+        />
+      </div>
 
       {/* Staff directory */}
-      <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-
-        <div className="p-5 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h2 className="font-semibold text-slate-900">
-              Staff Directory
-            </h2>
-
-            <p className="text-sm text-slate-500 mt-1">
-              Search and view employee records retrieved from the database.
-            </p>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-2">
-            <div className="relative">
-              <Search
-                size={18}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              />
-
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search staff..."
-                className={`${inputClass} sm:w-64 pl-10`}
-              />
-            </div>
-          </div>
-        </div>
-
-        {error && (
-          <div className="m-5 p-4 rounded-lg bg-red-50 border border-red-200 flex items-start gap-3">
-            <AlertCircle size={20} className="text-red-600 shrink-0" />
-
+      {showDirectory && (
+        <section
+          id="staff-directory"
+          className="bg-white border border-slate-200 rounded-xl overflow-hidden"
+        >
+          <div className="p-5 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
-              <p className="text-sm font-medium text-red-800 whitespace-pre-line">
-                {error}
+              <h2 className="font-semibold text-slate-900">
+                Staff Directory
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">
+                View and manage employee records and account access.
               </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative">
+                <Search
+                  size={18}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search staff..."
+                  className={`${inputClass} sm:w-64 pl-10`}
+                />
+              </div>
 
               <button
                 type="button"
                 onClick={loadStaff}
-                className="text-sm text-red-700 underline mt-2"
+                disabled={loading}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
-                Try again
+                <RefreshCw
+                  size={16}
+                  className={loading ? 'animate-spin' : ''}
+                />
+                Refresh
               </button>
             </div>
           </div>
-        )}
 
-        {loading ? (
-          <div className="p-12 text-center text-slate-500">
-            <RefreshCw size={25} className="animate-spin mx-auto mb-3" />
-            Loading staff records...
-          </div>
-        ) : !error && filteredStaff.length === 0 ? (
-          <div className="p-12 text-center">
-            <Users size={35} className="mx-auto text-slate-300 mb-3" />
+          {error && (
+            <div className="m-5 p-4 rounded-lg bg-red-50 border border-red-200 flex items-start gap-3">
+              <AlertCircle size={20} className="text-red-600 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-red-800 whitespace-pre-line">
+                  {error}
+                </p>
+                <button
+                  type="button"
+                  onClick={loadStaff}
+                  className="text-sm text-red-700 underline mt-2"
+                >
+                  Try again
+                </button>
+              </div>
+            </div>
+          )}
 
-            <p className="font-medium text-slate-700">
-              {search ? 'No matching staff found.' : 'No staff records found.'}
-            </p>
-
-            <p className="text-sm text-slate-500 mt-1">
-              {search
-                ? 'Try another search term.'
-                : 'Register your first employee to get started.'}
-            </p>
-          </div>
-        ) : !error ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-5 py-4">Staff Member</th>
-                  <th className="px-5 py-4">Staff Number</th>
-                  <th className="px-5 py-4">Branch</th>
-                  <th className="px-5 py-4">Role</th>
-                  <th className="px-5 py-4">Shift</th>
-                  <th className="px-5 py-4">Phone</th>
-                  <th className="px-5 py-4">Status</th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-slate-100">
-                {filteredStaff.map((member) => (
-                  <tr key={member.id} className="hover:bg-slate-50">
-                    <td className="px-5 py-4">
-                      <p className="font-medium text-slate-900">
-                        {member.full_name || member.username}
-                      </p>
-
-                      <p className="text-xs text-slate-500 mt-1">
-                        {member.email}
-                      </p>
-                    </td>
-
-                    <td className="px-5 py-4 text-sm text-slate-700">
-                      {member.staff_number}
-                    </td>
-
-                    <td className="px-5 py-4 text-sm text-slate-700">
-                      {member.branch_name || 'Not assigned'}
-                    </td>
-
-                    <td className="px-5 py-4 text-sm text-slate-700">
-                      {ROLE_LABELS[member.role] || member.role || 'Not assigned'}
-                    </td>
-
-                    <td className="px-5 py-4">
-                      <span
-                        className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${getShiftStyle(member.current_shift)}`}
-                      >
-                        {member.current_shift || 'Unassigned'}
-                      </span>
-                    </td>
-
-                    <td className="px-5 py-4 text-sm text-slate-700">
-                      {member.phone_number || 'Not provided'}
-                    </td>
-
-                    <td className="px-5 py-4">
-                      <span
-                        className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${getStatusStyle(member.employment_status)}`}
-                      >
-                        {member.employment_status}
-                      </span>
-                    </td>
+          {loading ? (
+            <div className="p-12 text-center text-slate-500">
+              <RefreshCw size={25} className="animate-spin mx-auto mb-3" />
+              Loading staff records...
+            </div>
+          ) : !error && filteredStaff.length === 0 ? (
+            <div className="p-12 text-center">
+              <Users size={35} className="mx-auto text-slate-300 mb-3" />
+              <p className="font-medium text-slate-700">
+                {search ? 'No matching staff found.' : 'No staff records found.'}
+              </p>
+              <p className="text-sm text-slate-500 mt-1">
+                {search
+                  ? 'Try another search term.'
+                  : 'Register your first employee to get started.'}
+              </p>
+            </div>
+          ) : !error ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-5 py-4">Staff Number</th>
+                    <th className="px-5 py-4">Branch</th>
+                    <th className="px-5 py-4">Role</th>
+                    <th className="px-5 py-4">Status</th>
+                    <th className="px-5 py-4">Account Management</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+                </thead>
 
-        {!loading && !error && filteredStaff.length > 0 && (
-          <div className="px-5 py-4 border-t border-slate-200 text-sm text-slate-500">
-            Showing {filteredStaff.length} of {staff.length} staff members.
-          </div>
-        )}
-      </section>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredStaff.map((member) => {
+                    const active = member.employment_status === 'ACTIVE'
+                    const suspended = member.employment_status === 'SUSPENDED'
+                    const inactive = member.employment_status === 'INACTIVE'
+                    const isOwnerAccount = member.role === 'OWNER'
 
-      {/* Staff registration modal */}
+                    return (
+                      <tr key={member.id} className="hover:bg-slate-50 align-top">
+                        <td className="px-5 py-4 text-sm font-medium text-slate-800">
+                          {member.staff_number || 'Not assigned'}
+                        </td>
+
+                        <td className="px-5 py-4 text-sm text-slate-700">
+                          {member.branch_name || 'Not assigned'}
+                        </td>
+
+                        <td className="px-5 py-4 text-sm text-slate-700">
+                          {formatRole(member.role)}
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <div className="space-y-1">
+                            <span
+                              className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${getStatusStyle(member.employment_status)}`}
+                            >
+                              {member.employment_status}
+                            </span>
+                            <p className="text-xs text-slate-500">
+                              {active
+                                ? 'Login expected enabled'
+                                : 'Login disabled'}
+                            </p>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4 min-w-[280px]">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDetailsMember(member)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold"
+                            >
+                              <Eye size={14} />
+                              View Full Details
+                            </button>
+
+                            {!isOwnerAccount && (
+                              <button
+                                type="button"
+                                onClick={() => openEdit(member)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-semibold"
+                              >
+                                <Pencil size={14} />
+                                Edit
+                              </button>
+                            )}
+
+                            {active && !isOwnerAccount && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => openStatusAction(member, 'SUSPEND')}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-50 text-red-700 hover:bg-red-100 text-xs font-semibold"
+                                >
+                                  <ShieldAlert size={14} />
+                                  Suspend
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => openStatusAction(member, 'DEACTIVATE')}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 text-xs font-semibold"
+                                >
+                                  <UserX size={14} />
+                                  Deactivate
+                                </button>
+                              </>
+                            )}
+
+                            {(inactive || suspended) && !isOwnerAccount && (
+                              <button
+                                type="button"
+                                onClick={() => openStatusAction(member, 'ACTIVATE')}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 text-xs font-semibold"
+                              >
+                                <CheckCircle2 size={14} />
+                                {suspended ? 'Reactivate' : 'Activate'}
+                              </button>
+                            )}
+
+                            {!isOwnerAccount && (
+                              <button
+                                type="button"
+                                onClick={() => openStatusAction(member, 'ARCHIVE')}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 text-xs font-semibold"
+                              >
+                                <Archive size={14} />
+                                Archive
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => openHistory(member)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-semibold"
+                            >
+                              <History size={14} />
+                              History
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {!loading && !error && filteredStaff.length > 0 && (
+            <div className="px-5 py-4 border-t border-slate-200 text-sm text-slate-500">
+              Showing {filteredStaff.length} of {staff.length} staff members.
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Full staff details modal */}
+      {detailsMember && (
+        <Modal
+          title="Full Staff Details"
+          description={`Complete available profile for ${detailsMember.full_name || detailsMember.username || detailsMember.staff_number}.`}
+          onClose={() => setDetailsMember(null)}
+          maxWidth="max-w-3xl"
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {[
+              ['Full Name', detailsMember.full_name],
+              ['Username', detailsMember.username],
+              ['Email Address', detailsMember.email],
+              ['Phone Number', detailsMember.phone_number],
+              ['Staff Number', detailsMember.staff_number],
+              ['Branch', detailsMember.branch_name],
+              ['Role', formatRole(detailsMember.role)],
+              ['Employment Status', detailsMember.employment_status],
+              ['Assigned Shift', detailsMember.current_shift],
+              ['Date Joined', detailsMember.date_joined],
+              ['Archived', detailsMember.is_archived === true ? 'Yes' : detailsMember.is_archived === false ? 'No' : null],
+            ]
+              .filter(([, value]) => value !== undefined && value !== null && value !== '')
+              .map(([label, value]) => (
+                <div
+                  key={label}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
+                >
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                    {label}
+                  </p>
+                  <p className="mt-1 break-words text-sm font-semibold text-slate-900">
+                    {value}
+                  </p>
+                </div>
+              ))}
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setDetailsMember(null)}
+              className="rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Edit staff modal */}
+      {editingMember && (
+        <Modal
+          title="Edit Staff Profile"
+          description={`Update profile details for ${editingMember.full_name || editingMember.username}.`}
+          onClose={closeEdit}
+          footer={
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeEdit}
+                disabled={editSubmitting}
+                className="px-5 py-2.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-700 hover:bg-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                form="staff-edit-form"
+                disabled={editSubmitting || branchesLoading || branches.length === 0}
+                className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {editSubmitting ? (
+                  <>
+                    <RefreshCw size={16} className="animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save size={17} />
+                    Save Changes
+                  </>
+                )}
+              </button>
+            </div>
+          }
+        >
+          <form id="staff-edit-form" onSubmit={handleEdit} className="space-y-5">
+            {editError && (
+              <div
+                role="alert"
+                className="p-4 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 whitespace-pre-line"
+              >
+                {editError}
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="edit_staff_number" className={labelClass}>
+                Staff Number *
+              </label>
+              <input
+                id="edit_staff_number"
+                name="staff_number"
+                value={editForm.staff_number}
+                onChange={updateEditField}
+                className={inputClass}
+                required
+              />
+            </div>
+
+            <div>
+              <label htmlFor="edit_branch" className={labelClass}>
+                Branch *
+              </label>
+              <div className="relative">
+                <Building2
+                  size={17}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <select
+                  id="edit_branch"
+                  name="branch"
+                  value={editForm.branch}
+                  onChange={updateEditField}
+                  className={`${inputClass} pl-10`}
+                  required
+                  disabled={branchesLoading || branches.length === 0}
+                >
+                  <option value="">
+                    {branchesLoading ? 'Loading branches...' : 'Select branch'}
+                  </option>
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name} ({branch.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {branchError && (
+                <p className="text-xs text-red-600 mt-1">{branchError}</p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="edit_phone_number" className={labelClass}>
+                Phone Number
+              </label>
+              <input
+                id="edit_phone_number"
+                name="phone_number"
+                type="tel"
+                value={editForm.phone_number}
+                onChange={updateEditField}
+                className={inputClass}
+                placeholder="e.g. 0712345678"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="edit_date_joined" className={labelClass}>
+                Date Joined *
+              </label>
+              <input
+                id="edit_date_joined"
+                name="date_joined"
+                type="date"
+                value={editForm.date_joined}
+                onChange={updateEditField}
+                max={getToday()}
+                className={inputClass}
+                required
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Future dates are not allowed.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-600">
+              Role and assigned shift are managed separately using the role-management and shift-management workflows.
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Role management modal */}
+      {showRoleManagement && (
+        <Modal
+          title="Manage Staff Roles"
+          description="Change an employee's system role. Every role change requires a reason and is recorded in the audit history."
+          onClose={closeRoleManagement}
+          maxWidth="max-w-4xl"
+        >
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <section className="space-y-3">
+              <div>
+                <label htmlFor="role_member" className={labelClass}>
+                  Select Staff Member
+                </label>
+                <select
+                  id="role_member"
+                  value={roleMember?.id || ''}
+                  onChange={(event) => {
+                    const member = manageableRoleMembers.find(
+                      (item) => String(item.id) === event.target.value
+                    )
+                    if (member) selectRoleMember(member)
+                  }}
+                  className={inputClass}
+                >
+                  <option value="">Choose an employee</option>
+                  {manageableRoleMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.full_name || member.username} — {member.staff_number}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {roleMember && (
+                <form onSubmit={handleRoleChange} className="space-y-4">
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                    <p className="font-semibold text-slate-900">
+                      {roleMember.full_name || roleMember.username}
+                    </p>
+                    <p className="text-sm text-slate-500">
+                      {roleMember.staff_number} · {roleMember.email}
+                    </p>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Current role</span>
+                      <span className="font-semibold text-slate-800">
+                        {formatRole(roleMember.role)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Employment status</span>
+                      <span className="font-medium text-slate-800">
+                        {roleMember.employment_status}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label htmlFor="new_staff_role" className={labelClass}>
+                      New Role *
+                    </label>
+                    <select
+                      id="new_staff_role"
+                      value={roleValue}
+                      onChange={(event) => setRoleValue(event.target.value)}
+                      className={inputClass}
+                      required
+                    >
+                      {roleOptions
+                        .filter((option) =>
+                          option.value !== 'ADMIN' || canManageAdminRole
+                        )
+                        .map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                    </select>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Owner accounts are not available for role changes here.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="role_change_reason" className={labelClass}>
+                      Reason for Role Change *
+                    </label>
+                    <textarea
+                      id="role_change_reason"
+                      value={roleReason}
+                      onChange={(event) => setRoleReason(event.target.value)}
+                      className={`${inputClass} min-h-24 resize-y`}
+                      placeholder="Explain why this employee's role is changing..."
+                      maxLength={2000}
+                      required
+                    />
+                  </div>
+
+                  {roleError && (
+                    <div
+                      role="alert"
+                      className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 whitespace-pre-line"
+                    >
+                      {roleError}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={
+                      roleLoading ||
+                      !roleValue ||
+                      roleValue === roleMember.role ||
+                      !roleReason.trim()
+                    }
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold disabled:opacity-50"
+                  >
+                    {roleLoading ? (
+                      <>
+                        <RefreshCw size={16} className="animate-spin" />
+                        Updating Role...
+                      </>
+                    ) : (
+                      <>
+                        <Shield size={17} />
+                        Save Role Change
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+
+              {!roleMember && (
+                <div className="p-8 text-center border border-dashed border-slate-300 rounded-xl">
+                  <Users size={30} className="mx-auto text-slate-300 mb-3" />
+                  <p className="font-medium text-slate-700">
+                    Select an employee
+                  </p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Their current role and role-change form will appear here.
+                  </p>
+                </div>
+              )}
+            </section>
+
+            <section className="border border-slate-200 rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-4">
+                <History size={18} className="text-purple-600" />
+                <h3 className="font-semibold text-slate-900">
+                  Role Change History
+                </h3>
+              </div>
+
+              {!roleMember ? (
+                <p className="text-sm text-slate-500 text-center py-8">
+                  Select an employee to view their role history.
+                </p>
+              ) : (
+                <HistoryList
+                  items={roleHistory}
+                  loading={roleHistoryLoading}
+                  error={roleHistoryError}
+                  emptyTitle="No role changes recorded."
+                  emptyDescription="Future role changes will appear here."
+                  renderItem={(item) => (
+                    <div
+                      key={item.id}
+                      className="border border-slate-200 rounded-lg p-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-slate-900">
+                          {formatRole(item.previous_role)} → {formatRole(item.new_role)}
+                        </span>
+                        <span className="text-xs text-slate-500 flex items-center gap-1">
+                          <Clock size={12} />
+                          {formatDateTime(item.created_at)}
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-slate-500 mt-2">
+                        Changed by: {item.changed_by_username || 'Unknown'}
+                      </p>
+
+                      {item.reason && (
+                        <p className="text-sm text-slate-600 mt-2 whitespace-pre-line">
+                          <strong>Reason:</strong> {item.reason}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                />
+              )}
+            </section>
+          </div>
+        </Modal>
+      )}
+
+      {/* Shift management modal */}
+      {showShiftManagement && (
+        <Modal
+          title="Manage Staff Shifts"
+          description="Assign DAY or NIGHT shifts with an effective date. Changes are recorded in the employee's shift history."
+          onClose={closeShiftManagement}
+          maxWidth="max-w-4xl"
+        >
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <section className="space-y-3">
+              <div>
+                <label htmlFor="shift_member" className={labelClass}>
+                  Select Staff Member
+                </label>
+                <select
+                  id="shift_member"
+                  value={shiftMember?.id || ''}
+                  onChange={(event) => {
+                    const member = shiftMembers.find(
+                      (item) => String(item.id) === event.target.value
+                    )
+                    if (member) selectShiftMember(member)
+                  }}
+                  className={inputClass}
+                >
+                  <option value="">Choose an employee</option>
+                  {shiftMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.full_name || member.username} — {member.staff_number}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {shiftMember && (
+                <form onSubmit={handleShiftChange} className="space-y-4">
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                    <p className="font-semibold text-slate-900">
+                      {shiftMember.full_name || shiftMember.username}
+                    </p>
+                    <p className="text-sm text-slate-500">
+                      {shiftMember.staff_number} · {shiftMember.branch_name || 'No branch'}
+                    </p>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Current shift</span>
+                      <span className="font-semibold text-slate-800">
+                        {shiftMember.current_shift || 'Not assigned'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Employment status</span>
+                      <span className="font-medium text-slate-800">
+                        {shiftMember.employment_status}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label htmlFor="new_staff_shift" className={labelClass}>
+                      New Shift *
+                    </label>
+                    <select
+                      id="new_staff_shift"
+                      value={shiftValue}
+                      onChange={(event) => setShiftValue(event.target.value)}
+                      className={inputClass}
+                      required
+                    >
+                      <option value="DAY">Day Shift</option>
+                      <option value="NIGHT">Night Shift</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="shift_effective_from" className={labelClass}>
+                      Effective From *
+                    </label>
+                    <input
+                      id="shift_effective_from"
+                      type="date"
+                      min={getToday()}
+                      value={shiftEffectiveFrom}
+                      onChange={(event) => setShiftEffectiveFrom(event.target.value)}
+                      className={inputClass}
+                      required
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Backdated shift changes are not allowed.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="shift_change_reason" className={labelClass}>
+                      Reason for Shift Change *
+                    </label>
+                    <textarea
+                      id="shift_change_reason"
+                      value={shiftReason}
+                      onChange={(event) => setShiftReason(event.target.value)}
+                      className={`${inputClass} min-h-24 resize-y`}
+                      placeholder="Explain why this employee's shift is changing..."
+                      maxLength={2000}
+                      required
+                    />
+                  </div>
+
+                  {shiftError && (
+                    <div
+                      role="alert"
+                      className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 whitespace-pre-line"
+                    >
+                      {shiftError}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={
+                      shiftLoading ||
+                      !shiftValue ||
+                      shiftValue === shiftMember.current_shift ||
+                      !shiftReason.trim()
+                    }
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold disabled:opacity-50"
+                  >
+                    {shiftLoading ? (
+                      <>
+                        <RefreshCw size={16} className="animate-spin" />
+                        Updating Shift...
+                      </>
+                    ) : (
+                      <>
+                        <CalendarClock size={17} />
+                        Save Shift Change
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+
+              {!shiftMember && (
+                <div className="p-8 text-center border border-dashed border-slate-300 rounded-xl">
+                  <CalendarClock size={30} className="mx-auto text-slate-300 mb-3" />
+                  <p className="font-medium text-slate-700">
+                    Select an employee
+                  </p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Their current shift and shift-change form will appear here.
+                  </p>
+                </div>
+              )}
+            </section>
+
+            <section className="border border-slate-200 rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-4">
+                <History size={18} className="text-emerald-600" />
+                <h3 className="font-semibold text-slate-900">
+                  Shift Assignment History
+                </h3>
+              </div>
+
+              {!shiftMember ? (
+                <p className="text-sm text-slate-500 text-center py-8">
+                  Select an employee to view their shift history.
+                </p>
+              ) : (
+                <HistoryList
+                  items={shiftHistory}
+                  loading={shiftHistoryLoading}
+                  error={shiftHistoryError}
+                  emptyTitle="No shift history available."
+                  emptyDescription="Shift assignments will appear here when recorded."
+                  renderItem={(item) => (
+                    <div
+                      key={item.id}
+                      className="border border-slate-200 rounded-lg p-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="inline-flex px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
+                          {item.shift} SHIFT
+                        </span>
+                        <span className="text-xs text-slate-500 flex items-center gap-1">
+                          <Clock size={12} />
+                          {formatDateTime(item.created_at)}
+                        </span>
+                      </div>
+
+                      <p className="text-sm text-slate-700 mt-3">
+                        <strong>Effective from:</strong> {item.effective_from}
+                      </p>
+
+                      <p className="text-sm text-slate-700 mt-1">
+                        <strong>Effective to:</strong> {item.effective_to || 'Current'}
+                      </p>
+
+                      {item.reason && (
+                        <p className="text-sm text-slate-600 mt-2 whitespace-pre-line">
+                          <strong>Reason:</strong> {item.reason}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                />
+              )}
+            </section>
+          </div>
+        </Modal>
+      )}
+
+      {/* Registration modal */}
       {showModal && (
         <div
           className="fixed inset-0 z-[100] bg-slate-950/60 flex items-center justify-center p-3 sm:p-6"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              closeRegistration()
-            }
+            if (event.target === event.currentTarget) closeRegistration()
           }}
         >
           <div className="bg-white w-full max-w-3xl max-h-[95vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-
-            {/* Modal header */}
             <div className="px-6 py-5 border-b border-slate-200 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-slate-900">
                   Register New Staff
                 </h2>
-
                 <p className="text-sm text-slate-500 mt-1">
                   Create an employee account and assign their branch and shift.
                 </p>
@@ -877,27 +1803,20 @@ export default function StaffPage() {
               </button>
             </div>
 
-            {/* Registration form */}
-            <form
-              onSubmit={handleRegistration}
-              className="flex-1 overflow-y-auto"
-            >
+            <form onSubmit={handleRegistration} className="flex-1 overflow-y-auto">
               <div className="p-6 space-y-6">
-
                 {formError && (
                   <div
                     role="alert"
                     className="p-4 rounded-lg bg-red-50 border border-red-200 flex gap-3"
                   >
                     <AlertCircle className="text-red-600 shrink-0" size={20} />
-
                     <p className="text-sm text-red-800 whitespace-pre-line">
                       {formError}
                     </p>
                   </div>
                 )}
 
-                {/* Personal information */}
                 <section>
                   <h3 className="font-semibold text-slate-900 mb-4">
                     Personal Information
@@ -908,7 +1827,6 @@ export default function StaffPage() {
                       <label htmlFor="first_name" className={labelClass}>
                         First Name *
                       </label>
-
                       <input
                         id="first_name"
                         name="first_name"
@@ -925,7 +1843,6 @@ export default function StaffPage() {
                       <label htmlFor="last_name" className={labelClass}>
                         Last Name *
                       </label>
-
                       <input
                         id="last_name"
                         name="last_name"
@@ -942,7 +1859,6 @@ export default function StaffPage() {
                       <label htmlFor="phone_number" className={labelClass}>
                         Phone Number
                       </label>
-
                       <input
                         id="phone_number"
                         name="phone_number"
@@ -959,7 +1875,6 @@ export default function StaffPage() {
                       <label htmlFor="email" className={labelClass}>
                         Email Address *
                       </label>
-
                       <input
                         id="email"
                         type="email"
@@ -977,7 +1892,6 @@ export default function StaffPage() {
 
                 <div className="border-t border-slate-100" />
 
-                {/* Account information */}
                 <section>
                   <h3 className="font-semibold text-slate-900 mb-4">
                     Account Information
@@ -988,7 +1902,6 @@ export default function StaffPage() {
                       <label htmlFor="username" className={labelClass}>
                         Username *
                       </label>
-
                       <input
                         id="username"
                         name="username"
@@ -1005,7 +1918,6 @@ export default function StaffPage() {
                       <label htmlFor="password" className={labelClass}>
                         Password *
                       </label>
-
                       <div className="relative">
                         <input
                           id="password"
@@ -1019,7 +1931,6 @@ export default function StaffPage() {
                           autoComplete="new-password"
                           required
                         />
-
                         <button
                           type="button"
                           onClick={() => setShowPassword((value) => !value)}
@@ -1035,7 +1946,6 @@ export default function StaffPage() {
 
                 <div className="border-t border-slate-100" />
 
-                {/* Employment information */}
                 <section>
                   <h3 className="font-semibold text-slate-900 mb-4">
                     Employment Information
@@ -1046,7 +1956,6 @@ export default function StaffPage() {
                       <label htmlFor="staff_number" className={labelClass}>
                         Staff Number *
                       </label>
-
                       <input
                         id="staff_number"
                         name="staff_number"
@@ -1062,13 +1971,11 @@ export default function StaffPage() {
                       <label htmlFor="branch" className={labelClass}>
                         Branch *
                       </label>
-
                       <div className="relative">
                         <Building2
                           size={17}
                           className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
                         />
-
                         <select
                           id="branch"
                           name="branch"
@@ -1083,7 +1990,6 @@ export default function StaffPage() {
                               ? 'Loading branches...'
                               : 'Select branch'}
                           </option>
-
                           {branches.map((branch) => (
                             <option key={branch.id} value={branch.id}>
                               {branch.name} ({branch.code})
@@ -1109,7 +2015,6 @@ export default function StaffPage() {
                       <label htmlFor="role" className={labelClass}>
                         Staff Role *
                       </label>
-
                       <select
                         id="role"
                         name="role"
@@ -1129,7 +2034,6 @@ export default function StaffPage() {
                       <label htmlFor="shift" className={labelClass}>
                         Assigned Shift *
                       </label>
-
                       <select
                         id="shift"
                         name="shift"
@@ -1147,7 +2051,6 @@ export default function StaffPage() {
                       <label htmlFor="date_joined" className={labelClass}>
                         Date Joined *
                       </label>
-
                       <input
                         id="date_joined"
                         type="date"
@@ -1158,7 +2061,6 @@ export default function StaffPage() {
                         className={inputClass}
                         required
                       />
-
                       <p className="text-xs text-slate-500 mt-1">
                         Future dates are not allowed.
                       </p>
@@ -1167,7 +2069,6 @@ export default function StaffPage() {
                 </section>
               </div>
 
-              {/* Modal footer */}
               <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col-reverse sm:flex-row justify-end gap-3">
                 <button
                   type="button"
@@ -1199,6 +2100,150 @@ export default function StaffPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Account status confirmation modal */}
+      {selectedMember && currentAction && (
+        <Modal
+          title={currentAction.title}
+          description={`${selectedMember.full_name || selectedMember.username} · ${selectedMember.staff_number}`}
+          onClose={closeStatusAction}
+          footer={
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeStatusAction}
+                disabled={actionLoading}
+                className="px-5 py-2.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-700 hover:bg-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                form="staff-status-action-form"
+                disabled={actionLoading}
+                className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-semibold disabled:opacity-50 ${currentAction.buttonClass}`}
+              >
+                {actionLoading ? (
+                  <>
+                    <RefreshCw size={16} className="animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    {currentAction.icon}
+                    {currentAction.button}
+                  </>
+                )}
+              </button>
+            </div>
+          }
+        >
+          <form
+            id="staff-status-action-form"
+            onSubmit={handleStatusAction}
+            className="space-y-4"
+          >
+            <p className="text-sm text-slate-600">
+              {currentAction.description}
+            </p>
+
+            <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
+              <div className="flex justify-between gap-3 text-sm">
+                <span className="text-slate-500">Current status</span>
+                <span className="font-semibold text-slate-800">
+                  {selectedMember.employment_status}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3 text-sm mt-2">
+                <span className="text-slate-500">Staff number</span>
+                <span className="font-semibold text-slate-800">
+                  {selectedMember.staff_number}
+                </span>
+              </div>
+            </div>
+
+            {currentAction.requiresReason && (
+              <div>
+                <label htmlFor="action_reason" className={labelClass}>
+                  Reason *
+                </label>
+                <textarea
+                  id="action_reason"
+                  value={actionReason}
+                  onChange={(event) => setActionReason(event.target.value)}
+                  className={`${inputClass} min-h-28 resize-y`}
+                  placeholder="Enter the reason for this action..."
+                  maxLength={2000}
+                  required
+                />
+              </div>
+            )}
+
+            {actionError && (
+              <div
+                role="alert"
+                className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 whitespace-pre-line"
+              >
+                {actionError}
+              </div>
+            )}
+          </form>
+        </Modal>
+      )}
+
+      {/* Status history modal */}
+      {historyMember && (
+        <Modal
+          title="Staff Account History"
+          description={`${historyMember.full_name || historyMember.username} · ${historyMember.staff_number}`}
+          onClose={closeHistory}
+        >
+          <HistoryList
+            items={historyItems}
+            loading={historyLoading}
+            error={historyError}
+            emptyTitle="No status history available."
+            emptyDescription="Account actions will appear here when recorded."
+            renderItem={(item) => (
+              <div
+                key={item.id}
+                className="border border-slate-200 rounded-xl p-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span
+                    className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${getStatusStyle(
+                      item.action === 'ACTIVATED'
+                        ? 'ACTIVE'
+                        : item.action === 'SUSPENDED'
+                          ? 'SUSPENDED'
+                          : 'INACTIVE'
+                    )}`}
+                  >
+                    {getActionLabel(item.action)}
+                  </span>
+
+                  <span className="text-xs text-slate-500 flex items-center gap-1">
+                    <Clock size={13} />
+                    {formatDateTime(item.created_at)}
+                  </span>
+                </div>
+
+                <p className="text-sm text-slate-700 mt-3">
+                  <strong>Performed by:</strong>{' '}
+                  {item.performed_by_username || 'Unknown'}
+                </p>
+
+                {item.reason && (
+                  <p className="text-sm text-slate-600 mt-2 whitespace-pre-line">
+                    <strong>Reason:</strong> {item.reason}
+                  </p>
+                )}
+              </div>
+            )}
+          />
+        </Modal>
       )}
     </div>
   )
